@@ -1,3 +1,5 @@
+"""My decode using sampling"""
+
 # the position are meant to be 2 dim.
 # csv file to read the target generate position should be written in the follow¥ing format
 #
@@ -90,37 +92,44 @@ def main(pos_path, model_path, target_len, cuda_id, use_cuda, save_dir,
 
     logger.info(f"generating sequences")
     scores = []
-    for i, (a, e_m) in enumerate(zip(transition, emission)):
-        sampler = ProfileHMMSampler(a, e_m, proba_is_log=True)
-        seq_pattern = sampler.most_probable()[1].replace("_",
-                                                         "").replace("N", "*")
-        products = product(
-            *[list("ATGC") for _ in range(seq_pattern.count("*"))])
+    i = 0
+    num_generations = 400
+    for _ in range(num_generations):
+        for a, e_m in zip(transition, emission):
+            sampler = ProfileHMMSampler(a, e_m, proba_is_log=True)
+            seq_pattern = sampler.sample()[1].replace("_",
+                                                      "").replace("N", "*")
+            products = product(
+                *[list("ATGC") for _ in range(seq_pattern.count("*"))])
 
-        rets = []
-        for nt_set in products:
-            ret = ""
-            for part, nt in zip(seq_pattern.split("*"), list(nt_set) + [""]):
-                ret += part + nt
-            rets += [ret]
-        if len(rets) > eval_max:
-            rets = [
-                rets[idx]
-                for idx in np.argsort(np.random.randn(len(rets)))[:eval_max]
-            ]
-        with Pool() as p:
-            probas = p.map(sampler.calc_seq_proba, rets)
+            rets = []
+            for nt_set in products:
+                ret = ""
+                for part, nt in zip(seq_pattern.split("*"),
+                                    list(nt_set) + [""]):
+                    ret += part + nt
+                rets += [ret]
+            if len(rets) > eval_max:
+                rets = [
+                    rets[idx] for idx in np.argsort(np.random.randn(len(rets)))
+                    [:eval_max]
+                ]
+            with Pool() as p:
+                probas = p.map(sampler.calc_seq_proba, rets)
 
-        most_probable_seq, min_value = sorted(list(zip(rets, probas)),
-                                              key=lambda x: x[1])[0]
-        min_value = min_value.item()
-        scores += [(seq_pattern, most_probable_seq, min_value)]
-        logger.info(f"{i}: {scores[-1]}")
+            most_probable_seq, min_value = sorted(list(zip(rets, probas)),
+                                                  key=lambda x: x[1])[0]
+            min_value = min_value.item()
+            scores += [(seq_pattern, most_probable_seq, min_value)]
+            logger.info(f"{i}: {scores[-1]}")
+            i += 1
 
     logger.info(f"saving to {save_dir}/decode_output.csv")
     df_result = pd.DataFrame(
         scores, columns=["pattern", "maximum_probable_sequence", "log_proba"])
-    df_concat = pd.concat([df, df_result], axis=1)
+    df_concat = pd.concat(
+        [pd.concat([df] * num_generations, ignore_index=True), df_result],
+        axis=1)
 
     df_concat.to_csv(save_dir / "decode_output.csv", index=False)
 
